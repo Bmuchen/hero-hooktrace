@@ -1,0 +1,100 @@
+ <!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Hero HookTrace – Webhook Debugger</title>
+
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #0f172a;
+      color: #e5e7eb;
+      padding: 40px;
+    }
+    button {
+      padding: 10px 16px;
+      background: #2563eb;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      margin-right: 10px;
+    }
+    pre {
+      background: #020617;
+      padding: 16px;
+      border-radius: 6px;
+      margin-top: 12px;
+      overflow-x: auto;
+    }
+    .endpoint-box {
+      margin-top: 16px;
+      background: #020617;
+      padding: 12px;
+      border-radius: 6px;
+      word-break: break-all;
+    }
+  </style>
+</head>
+<body>
+
+<h1>🚀 Hero HookTrace</h1>
+<p>Inspect, debug, and replay webhooks in real time</p>
+
+<button onclick="createEndpoint()">Create Webhook Endpoint</button>
+<button onclick="sendTestEvent()">Send Test Webhook</button>
+
+<div id="endpoint" class="endpoint-box"></div>
+
+<h3>Captured Events</h3>
+<pre id="events">No events yet</pre>
+
+<script>
+  let endpointKey = null;
+
+  async function createEndpoint() {
+    const res = await fetch("/endpoints", { method: "POST" });
+    const data = await res.json();
+
+    endpointKey = data.endpointKey;
+
+    document.getElementById("endpoint").innerHTML = `
+      <strong>Webhook URL:</strong><br/>
+      ${data.webhookUrl}
+    `;
+
+    setInterval(fetchEvents, 2000);
+  }
+
+  async function fetchEvents() {
+    if (!endpointKey) return;
+
+    const res = await fetch(`/events/${endpointKey}`);
+    const data = await res.json();
+
+    document.getElementById("events").textContent =
+      JSON.stringify(data, null, 2);
+  }
+
+  async function sendTestEvent() {
+    if (!endpointKey) {
+      alert("Create an endpoint first");
+      return;
+    }
+
+    await fetch(`/webhook/${endpointKey}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        event: "test.webhook",
+        message: "Hello from Hero HookTrace",
+        time: new Date().toISOString()
+      })
+    });
+  }
+</script>
+
+</body>
+</html>
