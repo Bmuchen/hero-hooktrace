@@ -50,26 +50,28 @@
 <pre id="events">No events yet</pre>
 
 <script>
-  let endpointKey = null;
+  let currentEndpoint = null;
 
   async function createEndpoint() {
     const res = await fetch("/endpoints", { method: "POST" });
     const data = await res.json();
 
-    endpointKey = data.endpointKey;
+    currentEndpoint = data;
 
     document.getElementById("endpoint").innerHTML = `
       <strong>Webhook URL:</strong><br/>
-      ${data.webhookUrl}
+      ${data.webhookUrl}<br/><br/>
+      <strong>Secret:</strong><br/>
+      ${data.secret}
     `;
 
     setInterval(fetchEvents, 2000);
   }
 
   async function fetchEvents() {
-    if (!endpointKey) return;
+    if (!currentEndpoint) return;
 
-    const res = await fetch(`/events/${endpointKey}`);
+    const res = await fetch(`/events/${currentEndpoint.endpointKey}`);
     const data = await res.json();
 
     document.getElementById("events").textContent =
@@ -77,24 +79,48 @@
   }
 
   async function sendTestEvent() {
-    if (!endpointKey) {
+    if (!currentEndpoint) {
       alert("Create an endpoint first");
       return;
     }
 
-    await fetch(`/webhook/${endpointKey}`, {
+    const payload = JSON.stringify({
+      event: "test.webhook",
+      message: "Hello from Hero HookTrace",
+      time: new Date().toISOString()
+    });
+
+    // Create HMAC signature
+    const encoder = new TextEncoder();
+    const key = await crypto.subtle.importKey(
+      "raw",
+      encoder.encode(currentEndpoint.secret),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign"]
+    );
+
+    const signatureBuffer = await crypto.subtle.sign(
+      "HMAC",
+      key,
+      encoder.encode(payload)
+    );
+
+    const signature = Array.from(new Uint8Array(signatureBuffer))
+      .map(b => b.toString(16).padStart(2, "0"))
+      .join("");
+
+    await fetch(`/webhook/${currentEndpoint.endpointKey}`, {
       method: "POST",
       headers: {
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "x-hooktrace-signature": signature
       },
-      body: JSON.stringify({
-        event: "test.webhook",
-        message: "Hello from Hero HookTrace",
-        time: new Date().toISOString()
-      })
+      body: payload
     });
   }
 </script>
 
 </body>
 </html>
+

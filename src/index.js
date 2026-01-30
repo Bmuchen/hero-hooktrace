@@ -1,8 +1,10 @@
- import express from "express";
+ import db from "./db/database.js";
+import express from "express";
 import path from "path";
 import { fileURLToPath } from "url";
 import dotenv from "dotenv";
 import crypto from "crypto";
+import fetch from "node-fetch"; // ✅ REQUIRED
 
 dotenv.config();
 
@@ -16,7 +18,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // --------------------
-// Middleware (for frontend + normal APIs)
+// Middleware
 // --------------------
 app.use(express.json({ limit: "2mb" }));
 app.use(express.urlencoded({ extended: true }));
@@ -25,11 +27,6 @@ app.use(express.urlencoded({ extended: true }));
 // Serve frontend
 // --------------------
 app.use(express.static(path.join(__dirname, "public")));
-
-// --------------------
-// In-memory storage (SAFE)
-// --------------------
-const endpoints = Object.create(null);
 
 // --------------------
 // Signature verification
@@ -56,37 +53,37 @@ app.get("/health", (req, res) => {
 });
 
 // --------------------
-// Create webhook endpoint
+// REPLAY EVENT ✅
 // --------------------
-app.post("/endpoints", (req, res) => {
-  const endpointKey = crypto.randomBytes(8).toString("hex");
-  const secret = crypto.randomBytes(24).toString("hex");
+ app.post("/webhook/:endpointKey", express.json(), (req, res) => {
+  const { endpointKey } = req.params;
 
-  endpoints[endpointKey] = {
-    secret,
-    events: []
+  const event = {
+    id: crypto.randomUUID(),
+    endpointKey,
+    method: req.method,
+    headers: JSON.stringify(req.headers),
+    body: JSON.stringify(req.body),
+    created_at: new Date().toISOString()
   };
 
-  const baseUrl =
-    process.env.RENDER_EXTERNAL_URL ||
-    `http://localhost:${PORT}`;
+  saveEvent(event);
 
-  res.json({
-    endpointKey,
-    secret,
-    webhookUrl: `${baseUrl}/webhook/${endpointKey}`
-  });
+  res.json({ received: true });
 });
 
 // --------------------
-// Receive webhook events (RAW BODY ONLY HERE)
+// Receive webhook events (RAW BODY ONLY)
 // --------------------
 app.all(
   "/webhook/:endpointKey",
   express.raw({ type: "*/*" }),
   (req, res) => {
     const { endpointKey } = req.params;
-    const endpoint = endpoints[endpointKey];
+
+    const endpoint = db
+      .prepare("SELECT * FROM endpoints WHERE id = ?")
+      .get(endpointKey);
 
     if (!endpoint) {
       return res.status(404).json({ error: "Endpoint not found" });
@@ -100,21 +97,28 @@ app.all(
       signature
     );
 
-    console.log("Signature valid:", isValid);
-
     if (!isValid) {
       return res.status(401).json({ error: "Invalid signature" });
     }
 
-    const event = {
-      id: crypto.randomUUID(),
-      time: new Date().toISOString(),
-      method: req.method,
-      headers: req.headers,
-      body: req.body.toString("utf8")
-    };
-
-    endpoint.events.unshift(event);
+    db.prepare(`
+      INSERT INTO events (
+        id,
+        endpoint_id,
+        method,
+        headers,
+        body,
+        created_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(
+      crypto.randomUUID(),
+      endpointKey,
+      req.method,
+      JSON.stringify(req.headers),
+      req.body.toString("utf8"),
+      new Date().toISOString()
+    );
 
     res.json({ received: true, secured: true });
   }
@@ -126,11 +130,23 @@ app.all(
 app.get("/events/:endpointKey", (req, res) => {
   const { endpointKey } = req.params;
 
-  if (!endpoints[endpointKey]) {
+  const endpoint = db
+    .prepare("SELECT id FROM endpoints WHERE id = ?")
+    .get(endpointKey);
+
+  if (!endpoint) {
     return res.status(404).json({ error: "Endpoint not found" });
   }
 
-  res.json(endpoints[endpointKey]);
+  const events = db.prepare(`
+    SELECT id, method, headers, body, created_at
+    FROM events
+    WHERE endpoint_id = ?
+    ORDER BY created_at DESC
+    LIMIT 50
+  `).all(endpointKey);
+
+  res.json({ endpointKey, count: events.length, events });
 });
 
 // --------------------
